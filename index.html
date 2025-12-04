@@ -444,6 +444,7 @@
     const App = {
         tasks: [],
         sortMethod: 'manual',
+        sortDirection: 'asc', // 'asc' or 'desc'
         theme: 'light',
         colorPalette: ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'], // Updated colors
         
@@ -461,6 +462,7 @@
             
             // Load Settings
             this.sortMethod = localStorage.getItem('focusList_sort') || 'manual';
+            this.sortDirection = localStorage.getItem('focusList_sortDir') || 'asc';
             this.theme = localStorage.getItem('focusList_theme') || 'light';
             
             // Load Title
@@ -558,8 +560,25 @@
             // Sort Buttons
             this.sortButtons.forEach(btn => {
                 btn.addEventListener('click', (e) => {
-                    this.sortMethod = e.currentTarget.dataset.sort;
+                    const sortType = e.currentTarget.dataset.sort;
+                    
+                    if (sortType === 'manual') {
+                        this.sortMethod = 'manual';
+                        // manual doesn't use direction in this UI context
+                    } else if (this.sortMethod === sortType) {
+                        // Toggle direction
+                        this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        // New sort type selected
+                        this.sortMethod = sortType;
+                        // Intelligent defaults:
+                        // Time usually implies Newest first (descending timestamp)
+                        if (sortType === 'time') this.sortDirection = 'desc';
+                        else this.sortDirection = 'asc';
+                    }
+                    
                     localStorage.setItem('focusList_sort', this.sortMethod);
+                    localStorage.setItem('focusList_sortDir', this.sortDirection);
                     this.updateSortUI();
                     this.render();
                 });
@@ -687,21 +706,47 @@
         /* --- Render Logic --- */
         sortTasksList(list) {
             let sorted = [...list];
+            if(this.sortMethod === 'manual') return sorted;
+
+            const dir = this.sortDirection === 'asc' ? 1 : -1;
+
             if (this.sortMethod === 'alphabetical') {
-                return sorted.sort((a, b) => a.text.localeCompare(b.text));
+                return sorted.sort((a, b) => a.text.localeCompare(b.text) * dir);
             } else if (this.sortMethod === 'time') {
-                return sorted.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                return sorted.sort((a, b) => (new Date(a.createdAt) - new Date(b.createdAt)) * dir);
             } else if (this.sortMethod === 'color') {
-                return sorted.sort((a, b) => this.colorPalette.indexOf(a.color) - this.colorPalette.indexOf(b.color));
+                return sorted.sort((a, b) => (this.colorPalette.indexOf(a.color) - this.colorPalette.indexOf(b.color)) * dir);
             }
             return sorted;
-        } ,
+        },
 
         updateSortUI() {
             this.sortButtons.forEach(btn => {
-                const isActive = btn.dataset.sort === this.sortMethod;
+                const type = btn.dataset.sort;
+                const isActive = type === this.sortMethod;
                 btn.classList.toggle('active', isActive);
                 btn.setAttribute('aria-pressed', isActive);
+                
+                // Reset text defaults
+                if(type === 'alphabetical') btn.textContent = 'A-Z';
+                if(type === 'time') btn.textContent = 'Date';
+                if(type === 'color') btn.textContent = 'Color';
+                if(type === 'manual') btn.textContent = 'Manual';
+
+                // Update text based on direction if active
+                if (isActive && type !== 'manual') {
+                    const arrow = this.sortDirection === 'asc' ? ' ↑' : ' ↓';
+                    
+                    if(type === 'alphabetical') {
+                        btn.textContent = this.sortDirection === 'asc' ? 'A-Z' : 'Z-A';
+                    } else if(type === 'time') {
+                        // Logic check: 'asc' sort is (a-b), which is Oldest first. 
+                        // 'desc' sort is (b-a), which is Newest first.
+                        btn.textContent = this.sortDirection === 'asc' ? 'Oldest' : 'Newest';
+                    } else if(type === 'color') {
+                        btn.textContent = 'Color' + arrow;
+                    }
+                }
             });
             this.listContainer.dataset.sortMode = this.sortMethod;
         },
@@ -902,6 +947,83 @@
                  [...this.list.children].forEach(li => li.classList.remove('drag-over-top', 'drag-over-bottom'));
             }
             this.draggedItem = null;
+        },
+
+        /* --- Export / Import --- */
+        exportCSV() {
+            if (this.tasks.length === 0) return alert("No tasks to export.");
+            
+            // Header: ID, Status, Task, Details, Color, CreatedAt
+            let csvContent = "ID,Status,Task,Details,Color,Created At\n";
+            
+            const sortedTasks = this.sortTasksList([...this.tasks]);
+
+            sortedTasks.forEach(task => {
+                const clean = (str) => `"${(str || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+                const status = task.completed ? "Done" : "Pending";
+                csvContent += `${task.id},${status},${clean(task.text)},${clean(task.details)},${task.color},${task.createdAt}\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", `focuslist_export_${new Date().toISOString().slice(0,10)}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        },
+
+        importCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target.result;
+                const rows = text.split('\n');
+                let count = 0;
+                
+                // Process in reverse to maintain order when using unshift
+                for(let i = rows.length - 1; i >= 1; i--) {
+                    const row = rows[i];
+                    if (!row.trim()) continue;
+                    
+                    const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
+                    
+                    if (cols && cols.length >= 3) {
+                        const clean = (str) => str ? str.replace(/^"|"$/g, '').replace(/""/g, '"') : '';
+                        
+                        let id = null, status, taskText, details = '', color, createdAt = null;
+
+                        if(cols.length >= 6) {
+                            // Format: ID, Status, Task, Details, Color, CreatedAt
+                            id = Number(cols[0]) || Date.now() + Math.random(); 
+                            status = cols[1];
+                            taskText = clean(cols[2]);
+                            details = clean(cols[3]);
+                            color = cols[4];
+                            createdAt = cols[5];
+                        } else {
+                            // Old formats fallback
+                            status = cols[0];
+                            taskText = clean(cols[1]);
+                            color = cols[2];
+                        }
+
+                        const isDone = status.toLowerCase() === 'done';
+                        if(!this.colorPalette.includes(color)) color = this.colorPalette[0];
+                        
+                        this.addTask(taskText, isDone, color, details, id, createdAt);
+                        count++;
+                    }
+                }
+                alert(`Imported ${count} tasks.`);
+                this.fileInput.value = ''; 
+            };
+            reader.readAsText(file);
         }
     };
 
