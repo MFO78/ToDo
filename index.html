@@ -368,6 +368,7 @@
             <span class="toolbar-label">Data</span>
             <button id="exportBtn" class="btn btn-sm">↓ Export</button>
             <button id="importBtn" class="btn btn-sm">↑ Import</button>
+            <button id="shareBtn" class="btn btn-sm">Share</button>
             <button id="themeToggle" class="btn btn-sm" aria-label="Toggle Dark Mode">Theme</button>
             <input type="file" id="fileInput" accept=".csv" class="sr-only" aria-hidden="true">
         </div>
@@ -487,6 +488,7 @@
             this.appTitle = document.getElementById('appTitle');
             this.themeToggle = document.getElementById('themeToggle');
             this.fileInput = document.getElementById('fileInput');
+            this.shareBtn = document.getElementById('shareBtn');
             this.sortButtons = document.querySelectorAll('.sort-btn');
             
             // Modal Elements
@@ -555,6 +557,7 @@
             this.themeToggle.addEventListener('click', () => this.toggleTheme());
             document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
             document.getElementById('importBtn').addEventListener('click', () => this.fileInput.click());
+            this.shareBtn.addEventListener('click', () => this.shareCSV());
             this.fileInput.addEventListener('change', (e) => this.importCSV(e));
             
             // Sort Buttons
@@ -949,13 +952,17 @@
             this.draggedItem = null;
         },
 
-        /* --- Export / Import --- */
-        exportCSV() {
-            if (this.tasks.length === 0) return alert("No tasks to export.");
+        /* --- Shared Logic for Export/Share --- */
+        getCSVContent() {
+             if (this.tasks.length === 0) return null;
             
             // Header: ID, Status, Task, Details, Color, CreatedAt
             let csvContent = "ID,Status,Task,Details,Color,Created At\n";
             
+            // Export sorted as they appear in UI (sort of, we just grab current list state or use a default sort?)
+            // Usually exports dump the whole DB, let's dump everything but sorted logically
+            // We'll reuse sortTasksList logic but default to Time or something if Manual?
+            // Let's just dump current state in memory
             const sortedTasks = this.sortTasksList([...this.tasks]);
 
             sortedTasks.forEach(task => {
@@ -963,7 +970,15 @@
                 const status = task.completed ? "Done" : "Pending";
                 csvContent += `${task.id},${status},${clean(task.text)},${clean(task.details)},${task.color},${task.createdAt}\n`;
             });
+            
+            return csvContent;
+        },
 
+        /* --- Export / Import --- */
+        exportCSV() {
+            const csvContent = this.getCSVContent();
+            if (!csvContent) return alert("No tasks to export.");
+            
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
@@ -974,6 +989,25 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+        },
+        
+        shareCSV() {
+            const csvContent = this.getCSVContent();
+            if (!csvContent) return alert("No tasks to share.");
+            
+            const file = new File([csvContent], `focuslist_tasks_${new Date().toISOString().slice(0,10)}.csv`, { type: 'text/csv' });
+            
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                navigator.share({
+                    files: [file],
+                    title: 'FocusList Tasks',
+                    text: 'Here is my task list export.'
+                })
+                .then(() => console.log('Share successful'))
+                .catch((error) => console.log('Error sharing', error));
+            } else {
+                alert("Sharing files is not supported on this browser/device. Please use the Export button instead.");
+            }
         },
 
         importCSV(event) {
