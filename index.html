@@ -178,7 +178,7 @@
         }
 
         /* --- Task List --- */
-        .task-list { list-style: none; display: flex; flex-direction: column; gap: 0.875rem; position: relative; padding-bottom: 2rem;}
+        .task-list { list-style: none; display: flex; flex-direction: column; gap: 0.875rem; position: relative; }
 
         .task-item {
             display: flex; align-items: flex-start; padding: 1rem;
@@ -206,6 +206,33 @@
         .task-item.completed { opacity: 0.65; background-color: rgba(0,0,0,0.02); box-shadow: none; }
         .task-item.completed .task-text { text-decoration: line-through; color: var(--text-muted); }
 
+        /* --- Completed Section --- */
+        .completed-section {
+            margin-top: 3rem;
+            border-top: 2px dashed var(--border-light);
+            padding-top: 2rem;
+            position: relative;
+        }
+        
+        .completed-heading {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .completed-heading::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: var(--border-light);
+        }
+
         /* Task Item Components */
         .color-indicator {
             width: 4px; position: absolute; left: 0; top: 0; bottom: 0;
@@ -216,7 +243,7 @@
             color: var(--text-muted); cursor: grab; padding: 0.25rem; font-size: 1.25rem;
             display: none; align-self: center;
         }
-        [data-sort-mode="manual"] .drag-handle { display: block; }
+        [data-sort-mode="manual"] .active-list .drag-handle { display: block; } /* Only show drag handle in Active List */
 
         .checkbox-wrapper { display: flex; align-items: center; height: 1.5rem; margin-top: 2px; }
         input[type="checkbox"] {
@@ -272,6 +299,7 @@
             background: rgba(0,0,0,0.02); 
             border-radius: var(--radius-md); 
             border: 2px dashed var(--border-light); 
+            margin-bottom: 2rem;
         }
 
         /* --- Dialog (Modal) --- */
@@ -349,6 +377,7 @@
             <button class="btn btn-sm sort-btn active" data-sort="manual" aria-pressed="true">Manual</button>
             <button class="btn btn-sm sort-btn" data-sort="alphabetical" aria-pressed="false">A-Z</button>
             <button class="btn btn-sm sort-btn" data-sort="time" aria-pressed="false">Newest</button>
+            <button class="btn btn-sm sort-btn" data-sort="color" aria-pressed="false">Color</button>
         </div>
     </header>
 
@@ -360,11 +389,19 @@
         <button type="submit" class="btn btn-primary" style="width: auto; padding: 0 1.5rem;">Add</button>
     </form>
 
-    <div role="region" aria-label="Task List" id="listContainer" data-sort-mode="manual">
-        <ul id="taskList" class="task-list" aria-live="polite">
-            <!-- Tasks injected here via JS -->
+    <div role="region" aria-label="Active Tasks" id="listContainer" data-sort-mode="manual">
+        <ul id="taskList" class="task-list active-list" aria-live="polite">
+            <!-- Active Tasks injected here via JS -->
         </ul>
         <div id="emptyState" class="empty-state" style="display: none;">All caught up! Add a task to get started.</div>
+    </div>
+
+    <!-- Separate Completed Section -->
+    <div id="completedSection" class="completed-section" style="display:none;">
+        <h3 class="completed-heading">Completed</h3>
+        <ul id="completedList" class="task-list completed-list">
+             <!-- Completed Tasks injected here -->
+        </ul>
     </div>
 </main>
 
@@ -440,7 +477,9 @@
         cacheDOM() {
             this.form = document.getElementById('addTaskForm');
             this.input = document.getElementById('newTaskInput');
-            this.list = document.getElementById('taskList');
+            this.list = document.getElementById('taskList'); // Active list
+            this.completedList = document.getElementById('completedList'); // Completed list
+            this.completedSection = document.getElementById('completedSection');
             this.listContainer = document.getElementById('listContainer');
             this.emptyState = document.getElementById('emptyState');
             this.appTitle = document.getElementById('appTitle');
@@ -463,36 +502,38 @@
                 this.input.value = '';
             });
 
-            // List Interactions (Delete, Check, Edit)
-            this.list.addEventListener('click', (e) => {
+            // Delegate events for BOTH lists
+            const handleListClick = (e) => {
                 const target = e.target;
                 const li = target.closest('li');
                 if (!li) return;
                 const id = Number(li.dataset.id);
 
-                // Delete
                 if (target.closest('.delete-btn')) {
                     this.deleteTask(id);
                     return;
                 } 
-                // Edit (Button or clicking text)
                 if (target.closest('.edit-btn') || target.closest('.task-content')) {
                     this.openEditModal(id);
                     return;
                 }
-                // Toggle Checkbox
                 if (target.matches('input[type="checkbox"]')) {
                     this.toggleTask(id);
                 }
-            });
-
-            // Color Palette Change (Inline)
-            this.list.addEventListener('change', (e) => {
-                if(e.target.classList.contains('palette-radio')) {
+            };
+            
+            const handlePaletteChange = (e) => {
+                 if(e.target.classList.contains('palette-radio')) {
                      const id = Number(e.target.closest('li').dataset.id);
                      this.updateColor(id, e.target.value);
                 }
-            });
+            };
+
+            this.list.addEventListener('click', handleListClick);
+            this.list.addEventListener('change', handlePaletteChange);
+            this.completedList.addEventListener('click', handleListClick);
+            this.completedList.addEventListener('change', handlePaletteChange);
+
 
             // Title Editing
             this.appTitle.addEventListener('blur', () => {
@@ -544,13 +585,18 @@
             if(this.sortMethod === 'manual') {
                  localStorage.setItem('focusList_tasks', JSON.stringify(this.tasks));
             } else {
-                // If sorted, update the underlying master list carefully
+                // Preserving order when sorted via other methods
                 const currentRaw = localStorage.getItem('focusList_tasks');
                 let rawTasks = currentRaw ? JSON.parse(currentRaw) : [];
+                // Update modified tasks in the raw list
                 this.tasks.forEach(task => {
                     const idx = rawTasks.findIndex(t => t.id === task.id);
                     if(idx !== -1) rawTasks[idx] = task;
                 });
+                // Ensure deleted tasks are removed
+                const currentIds = new Set(this.tasks.map(t => t.id));
+                rawTasks = rawTasks.filter(t => currentIds.has(t.id));
+                
                 localStorage.setItem('focusList_tasks', JSON.stringify(rawTasks));
             }
             this.render();
@@ -595,22 +641,20 @@
             this.editTitleInput.value = task.text;
             this.editDetailsInput.value = task.details || '';
             
-            // Build Modal Color Picker (Works for all screens now)
+            // Build Modal Color Picker
             this.modalColorPalette.innerHTML = '';
             this.colorPalette.forEach((color, idx) => {
-                // FIXED: added explicit ID and Label connection
                 const radioId = `modal-edit-color-${idx}`;
-                
                 const radio = document.createElement('input');
                 radio.type = 'radio';
                 radio.name = 'modal-color';
-                radio.id = radioId; // Set ID
+                radio.id = radioId; 
                 radio.value = color;
                 radio.className = 'palette-radio';
                 if(task.color === color) radio.checked = true;
                 
                 const label = document.createElement('label');
-                label.htmlFor = radioId; // Link label to radio
+                label.htmlFor = radioId;
                 label.className = 'palette-swatch';
                 label.style.backgroundColor = color;
                 label.setAttribute('aria-label', color);
@@ -631,7 +675,6 @@
                 task.text = this.editTitleInput.value.trim();
                 task.details = this.editDetailsInput.value.trim();
                 
-                // Check color picker
                 const selectedColor = this.modalColorPalette.querySelector('input:checked');
                 if(selectedColor) task.color = selectedColor.value;
                 
@@ -642,15 +685,17 @@
         },
 
         /* --- Render Logic --- */
-        getSortedTasks() {
-            let sorted = [...this.tasks];
+        sortTasksList(list) {
+            let sorted = [...list];
             if (this.sortMethod === 'alphabetical') {
                 return sorted.sort((a, b) => a.text.localeCompare(b.text));
             } else if (this.sortMethod === 'time') {
                 return sorted.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            } else if (this.sortMethod === 'color') {
+                return sorted.sort((a, b) => this.colorPalette.indexOf(a.color) - this.colorPalette.indexOf(b.color));
             }
             return sorted;
-        },
+        } ,
 
         updateSortUI() {
             this.sortButtons.forEach(btn => {
@@ -662,52 +707,73 @@
         },
 
         render() {
-            const tasksToRender = this.getSortedTasks();
-            this.list.innerHTML = '';
-            
-            if (tasksToRender.length === 0) {
-                this.emptyState.style.display = 'block';
-                return;
-            }
-            
-            this.emptyState.style.display = 'none';
+            // Split tasks
+            const activeTasks = this.tasks.filter(t => !t.completed);
+            const completedTasks = this.tasks.filter(t => t.completed);
 
-            tasksToRender.forEach(task => {
+            // Sort both lists
+            const sortedActive = this.sortTasksList(activeTasks);
+            const sortedCompleted = this.sortTasksList(completedTasks);
+
+            // Render Active
+            this.renderList(sortedActive, this.list);
+            
+            // Render Completed
+            this.renderList(sortedCompleted, this.completedList);
+
+            // Toggle UI States
+            if (sortedActive.length === 0) {
+                this.emptyState.style.display = 'block';
+                this.emptyState.textContent = completedTasks.length > 0 
+                    ? "Great job! All active tasks complete." 
+                    : "All caught up! Add a task to get started.";
+            } else {
+                this.emptyState.style.display = 'none';
+            }
+
+            // Toggle Completed Section Visibility
+            this.completedSection.style.display = sortedCompleted.length > 0 ? 'block' : 'none';
+        },
+
+        renderList(tasks, container) {
+            container.innerHTML = '';
+            tasks.forEach(task => {
                 const li = document.createElement('li');
-                const draggableClass = this.sortMethod === 'manual' ? 'draggable' : '';
+                // Only allow drag on active list + manual sort
+                const isDraggable = this.sortMethod === 'manual' && !task.completed;
+                const draggableClass = isDraggable ? 'draggable' : '';
+                
                 li.className = `task-item ${task.completed ? 'completed' : ''} ${draggableClass}`;
                 li.dataset.id = task.id;
-                li.draggable = this.sortMethod === 'manual';
+                li.draggable = isDraggable;
                 
-                // Visual Indicator Bar (instead of border-left)
+                // Visual Indicator
                 const indicator = document.createElement('div');
                 indicator.className = 'color-indicator';
                 indicator.style.backgroundColor = task.color;
 
-                // 1. Drag Handle
+                // Drag Handle
                 const dragHandle = document.createElement('span');
                 dragHandle.className = 'drag-handle';
                 dragHandle.innerHTML = '⋮⋮';
                 dragHandle.ariaHidden = "true";
 
-                // 2. Checkbox
+                // Checkbox
                 const checkWrapper = document.createElement('div');
                 checkWrapper.className = 'checkbox-wrapper';
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 checkbox.checked = task.completed;
-                checkbox.ariaLabel = `Mark "${task.text}" as completed`;
+                checkbox.ariaLabel = `Mark "${task.text}" as ${task.completed ? 'active' : 'completed'}`;
                 checkWrapper.appendChild(checkbox);
 
-                // 3. Content (Title + Preview)
+                // Content
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'task-content';
-                
                 const span = document.createElement('div');
                 span.className = 'task-text';
                 span.textContent = task.text;
                 span.title = "Click to edit";
-                
                 contentDiv.appendChild(span);
                 
                 if(task.details) {
@@ -717,14 +783,13 @@
                     contentDiv.appendChild(preview);
                 }
 
-                // 4. Color Palette (Hidden on Mobile via CSS)
+                // Color Palette
                 const paletteContainer = document.createElement('div');
                 paletteContainer.className = 'color-palette';
                 
                 this.colorPalette.forEach((paletteColor, index) => {
                     const radioName = `task-${task.id}-color`;
                     const radioId = `${radioName}-${index}`;
-                    
                     const radio = document.createElement('input');
                     radio.type = 'radio';
                     radio.name = radioName;
@@ -746,7 +811,7 @@
                     paletteContainer.appendChild(wrapper);
                 });
 
-                // 5. Actions Group
+                // Actions
                 const actionGroup = document.createElement('div');
                 actionGroup.className = 'action-group';
 
@@ -761,21 +826,22 @@
                 delBtn.ariaLabel = "Delete Task";
 
                 actionGroup.append(editBtn, delBtn);
-
                 li.append(indicator, dragHandle, checkWrapper, contentDiv, paletteContainer, actionGroup);
-                this.list.appendChild(li);
+                container.appendChild(li);
             });
         },
 
         /* --- Drag & Drop --- */
         bindDragEvents() {
+            // Only bind to active list
             this.list.addEventListener('dragstart', (e) => {
                 if(this.sortMethod !== 'manual') { e.preventDefault(); return; }
                 this.draggedItem = e.target.closest('li');
                 if(!this.draggedItem) return;
+                
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', this.draggedItem.dataset.id);
-                this.dragStartIndex = [...this.list.children].indexOf(this.draggedItem);
+                
                 setTimeout(() => this.draggedItem.classList.add('dragging'), 0);
             });
 
@@ -798,17 +864,33 @@
 
             this.list.addEventListener('drop', (e) => {
                 e.preventDefault();
+                this.cleanupDrag();
                 if(this.sortMethod !== 'manual' || !this.draggedItem) return;
+                
                 const target = e.target.closest('li');
                 if (target && target !== this.draggedItem) {
-                    const dropIndex = [...this.list.children].indexOf(target);
-                    const finalIndex = target.classList.contains('drag-over-bottom') ? dropIndex + 1 : dropIndex;
-                    const [removed] = this.tasks.splice(this.dragStartIndex, 1);
-                    const insertIndex = finalIndex > this.dragStartIndex ? finalIndex - 1 : finalIndex;
-                    this.tasks.splice(insertIndex, 0, removed);
-                    this.save();
+                    // Position logic logic based on IDs in master list
+                    const draggedId = Number(this.draggedItem.dataset.id);
+                    const targetId = Number(target.dataset.id);
+                    
+                    const draggedIndex = this.tasks.findIndex(t => t.id === draggedId);
+                    let targetIndex = this.tasks.findIndex(t => t.id === targetId);
+                    
+                    if (draggedIndex > -1 && targetIndex > -1) {
+                        const [movedTask] = this.tasks.splice(draggedIndex, 1);
+                        
+                        // Recalculate target index because array shifted if we removed something before it
+                        targetIndex = this.tasks.findIndex(t => t.id === targetId);
+                        
+                        // Determine drop position (before or after target)
+                        if (target.classList.contains('drag-over-bottom')) {
+                            targetIndex++;
+                        }
+                        
+                        this.tasks.splice(targetIndex, 0, movedTask);
+                        this.save();
+                    }
                 }
-                this.cleanupDrag();
             });
 
             this.list.addEventListener('dragend', () => this.cleanupDrag());
@@ -816,85 +898,10 @@
 
         cleanupDrag() {
             if(this.draggedItem) this.draggedItem.classList.remove('dragging');
-            [...this.list.children].forEach(li => li.classList.remove('drag-over-top', 'drag-over-bottom'));
+            if(this.list.children) {
+                 [...this.list.children].forEach(li => li.classList.remove('drag-over-top', 'drag-over-bottom'));
+            }
             this.draggedItem = null;
-        },
-
-        /* --- Export / Import --- */
-        exportCSV() {
-            if (this.tasks.length === 0) return alert("No tasks to export.");
-            
-            // Header: ID, Status, Task, Details, Color, CreatedAt
-            let csvContent = "ID,Status,Task,Details,Color,Created At\n";
-            
-            const tasksToExport = this.getSortedTasks();
-            tasksToExport.forEach(task => {
-                const clean = (str) => `"${(str || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
-                const status = task.completed ? "Done" : "Pending";
-                csvContent += `${task.id},${status},${clean(task.text)},${clean(task.details)},${task.color},${task.createdAt}\n`;
-            });
-
-            // Use Blob to handle special characters (like # in colors) correctly
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            
-            link.setAttribute("href", url);
-            link.setAttribute("download", `focuslist_export_${new Date().toISOString().slice(0,10)}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        },
-
-        importCSV(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const text = e.target.result;
-                const rows = text.split('\n');
-                let count = 0;
-                
-                // Process in reverse to maintain order when using unshift
-                for(let i = rows.length - 1; i >= 1; i--) {
-                    const row = rows[i];
-                    if (!row.trim()) continue;
-                    
-                    const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-                    
-                    if (cols && cols.length >= 3) {
-                        const clean = (str) => str ? str.replace(/^"|"$/g, '').replace(/""/g, '"') : '';
-                        
-                        let id = null, status, taskText, details = '', color, createdAt = null;
-
-                        if(cols.length >= 6) {
-                            // Format: ID, Status, Task, Details, Color, CreatedAt
-                            id = Number(cols[0]) || Date.now() + Math.random(); // Keep ID if valid number
-                            status = cols[1];
-                            taskText = clean(cols[2]);
-                            details = clean(cols[3]);
-                            color = cols[4];
-                            createdAt = cols[5];
-                        } else {
-                            // Old formats
-                            status = cols[0];
-                            taskText = clean(cols[1]);
-                            color = cols[2];
-                        }
-
-                        const isDone = status.toLowerCase() === 'done';
-                        if(!this.colorPalette.includes(color)) color = this.colorPalette[0];
-                        
-                        this.addTask(taskText, isDone, color, details, id, createdAt);
-                        count++;
-                    }
-                }
-                alert(`Imported ${count} tasks.`);
-                this.fileInput.value = ''; 
-            };
-            reader.readAsText(file);
         }
     };
 
