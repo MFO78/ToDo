@@ -84,8 +84,54 @@
         }
 
         /* --- Header & Controls --- */
-        header { margin-bottom: 2.5rem; }
+        header { margin-bottom: 2rem; }
         
+        /* Tabs Container */
+        .tabs-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            overflow-x: auto;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+            /* Hide scrollbar but allow scroll */
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .tabs-wrapper::-webkit-scrollbar { display: none; }
+
+        .tab-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 20px;
+            padding: 0.4rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { background-color: var(--bg-body); color: var(--primary); }
+        .tab-btn.active {
+            background-color: var(--bg-body);
+            color: var(--primary);
+            border-color: var(--border-light);
+            box-shadow: var(--shadow-sm);
+        }
+        .new-tab-btn {
+            padding: 0.4rem;
+            width: 2rem;
+            height: 2rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
         /* Editable Title Styling */
         h1 { 
             font-size: 2.25rem; 
@@ -268,7 +314,6 @@
         /* Shared Palette Styles */
         .palette-radio { position: absolute; opacity: 0; width: 0; height: 0; }
         
-        /* FIXED: Added display: block and flex-shrink to maintain circle shape */
         .palette-swatch {
             display: block; 
             flex-shrink: 0;
@@ -339,19 +384,14 @@
                 flex-wrap: wrap; /* Allow wrapping for mobile layout */
             }
             
-            /* On Mobile: Hide the inline palette in the list item to save space */
             .task-item .color-palette { display: none; }
-            
-            /* Move actions to the right */
             .action-group { margin-left: auto; }
-            
-            .task-content { min-width: 60%; } /* Ensure text takes up space */
+            .task-content { min-width: 60%; } 
 
             .btn { width: 100%; justify-content: center; }
             .toolbar-group { justify-content: space-between; gap: 0.5rem; }
             .toolbar-group .btn { width: auto; flex: 1; font-size: 0.75rem; padding: 0.5rem 0.25rem; }
             
-            /* Ensure Modal Palette is nice and big on mobile */
             #modalColorPalette { justify-content: space-between; width: 100%; }
             #modalColorPalette .palette-swatch { width: 2rem; height: 2rem; }
         }
@@ -361,7 +401,12 @@
 
 <main class="container">
     <header>
-        <!-- Editable Title -->
+        <!-- Tabs for Multiple Lists -->
+        <div class="tabs-wrapper" id="tabsWrapper" role="tablist">
+            <!-- Injected by JS -->
+        </div>
+
+        <!-- Editable Title (List Name) -->
         <h1 id="appTitle" contenteditable="true" aria-label="List Title, click to edit" role="textbox">My Focus List</h1>
         
         <div class="toolbar-group" role="toolbar" aria-label="Data Actions">
@@ -369,8 +414,10 @@
             <button id="exportBtn" class="btn btn-sm">↓ Export</button>
             <button id="importBtn" class="btn btn-sm">↑ Import</button>
             <button id="shareBtn" class="btn btn-sm">Share</button>
+            <button id="deleteListBtn" class="btn btn-sm" style="color:var(--danger); border-color:var(--danger)">Delete List</button>
             <button id="themeToggle" class="btn btn-sm" aria-label="Toggle Dark Mode">Theme</button>
-            <input type="file" id="fileInput" accept=".csv" class="sr-only" aria-hidden="true">
+            <!-- FIX: Added broader mime-types for mobile compatibility -->
+            <input type="file" id="fileInput" accept=".csv, text/csv, application/vnd.ms-excel, text/plain" class="sr-only" aria-hidden="true">
         </div>
 
         <div class="toolbar-group" role="toolbar" aria-label="Sorting Options">
@@ -428,7 +475,6 @@
             <!-- Fixed Color Picker for ALL screens -->
             <div class="input-group" style="display:block;">
                  <label style="display:block; margin-bottom:0.5rem; font-weight:600; font-size:0.875rem; color:var(--text-muted);">COLOR MARKER</label>
-                 <!-- Removed 'mobile-only' class so this appears on desktop too -->
                  <div id="modalColorPalette" style="display:flex; gap: 0.5rem; flex-wrap: wrap;">
                      <!-- Injected by JS -->
                  </div>
@@ -443,45 +489,87 @@
 
 <script>
     const App = {
-        tasks: [],
+        data: {
+            lists: [],
+            activeListId: null
+        },
+        // Temporary state for UI
         sortMethod: 'manual',
-        sortDirection: 'asc', // 'asc' or 'desc'
+        sortDirection: 'asc', 
         theme: 'light',
-        colorPalette: ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'], // Updated colors
+        colorPalette: ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'],
         
         // Drag state
         draggedItem: null,
         dragStartIndex: null,
-        
-        // Edit state
         editingId: null,
 
         init() {
-            // Load Data
-            const stored = localStorage.getItem('focusList_tasks');
-            if (stored) this.tasks = JSON.parse(stored);
+            this.cacheDOM();
+
+            // Load Theme
+            this.theme = localStorage.getItem('focusList_theme') || 'light';
+            this.applyTheme();
+
+            // Load Data & Migration
+            const v2Data = localStorage.getItem('focusList_v2_data');
             
-            // Load Settings
+            // FIX: Robust data parsing with defaults if corrupted
+            if (v2Data) {
+                try {
+                    this.data = JSON.parse(v2Data);
+                    // Ensure lists array exists
+                    if (!this.data.lists || !Array.isArray(this.data.lists)) {
+                        this.data.lists = [];
+                    }
+                } catch(e) {
+                    console.error("Data corrupted, resetting", e);
+                    this.data = { lists: [], activeListId: null };
+                }
+            } else {
+                // Migration logic for old users
+                const oldTasks = localStorage.getItem('focusList_tasks');
+                const oldTitle = localStorage.getItem('focusList_title') || 'My Focus List';
+                
+                const defaultList = {
+                    id: Date.now(),
+                    name: oldTitle,
+                    tasks: oldTasks ? JSON.parse(oldTasks) : []
+                };
+                
+                this.data.lists = [defaultList];
+                this.data.activeListId = defaultList.id;
+                this.save();
+            }
+
+            // Fallback if something went wrong and no lists exist
+            if (this.data.lists.length === 0) {
+                this.addList('My Focus List');
+            } else if (!this.data.activeListId) {
+                this.data.activeListId = this.data.lists[0].id;
+            }
+
+            // Load UI Settings
             this.sortMethod = localStorage.getItem('focusList_sort') || 'manual';
             this.sortDirection = localStorage.getItem('focusList_sortDir') || 'asc';
-            this.theme = localStorage.getItem('focusList_theme') || 'light';
-            
-            // Load Title
-            const savedTitle = localStorage.getItem('focusList_title');
-            if(savedTitle) document.getElementById('appTitle').textContent = savedTitle;
 
-            this.cacheDOM();
-            this.applyTheme();
             this.bindEvents();
+            this.renderTabs();
             this.updateSortUI();
             this.render();
+        },
+
+        // Helper to get current list object
+        get activeList() {
+            return this.data.lists.find(l => l.id === this.data.activeListId) || this.data.lists[0];
         },
 
         cacheDOM() {
             this.form = document.getElementById('addTaskForm');
             this.input = document.getElementById('newTaskInput');
-            this.list = document.getElementById('taskList'); // Active list
-            this.completedList = document.getElementById('completedList'); // Completed list
+            this.tabsWrapper = document.getElementById('tabsWrapper');
+            this.list = document.getElementById('taskList'); 
+            this.completedList = document.getElementById('completedList'); 
             this.completedSection = document.getElementById('completedSection');
             this.listContainer = document.getElementById('listContainer');
             this.emptyState = document.getElementById('emptyState');
@@ -489,6 +577,7 @@
             this.themeToggle = document.getElementById('themeToggle');
             this.fileInput = document.getElementById('fileInput');
             this.shareBtn = document.getElementById('shareBtn');
+            this.deleteListBtn = document.getElementById('deleteListBtn');
             this.sortButtons = document.querySelectorAll('.sort-btn');
             
             // Modal Elements
@@ -506,7 +595,18 @@
                 this.input.value = '';
             });
 
-            // Delegate events for BOTH lists
+            // Tab Navigation
+            this.tabsWrapper.addEventListener('click', (e) => {
+                // Fix: Check for new-tab-btn first to avoid class conflict
+                if (e.target.closest('.new-tab-btn')) {
+                    this.addList();
+                } else if (e.target.closest('.tab-btn')) {
+                    const id = Number(e.target.closest('.tab-btn').dataset.id);
+                    this.switchList(id);
+                }
+            });
+
+            // List Items Interactions
             const handleListClick = (e) => {
                 const target = e.target;
                 const li = target.closest('li');
@@ -538,16 +638,17 @@
             this.completedList.addEventListener('click', handleListClick);
             this.completedList.addEventListener('change', handlePaletteChange);
 
-
-            // Title Editing
+            // Title Editing - Renames the LIST now
             this.appTitle.addEventListener('blur', () => {
-                localStorage.setItem('focusList_title', this.appTitle.textContent);
+                const newName = this.appTitle.textContent.trim() || 'Untitled List';
+                this.activeList.name = newName;
+                this.save();
+                this.renderTabs(); // Update tab name
             });
             this.appTitle.addEventListener('keydown', (e) => {
                 if(e.key === 'Enter') { e.preventDefault(); this.appTitle.blur(); }
             });
 
-            // Modal Save
             this.editForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.saveEdit();
@@ -558,28 +659,22 @@
             document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
             document.getElementById('importBtn').addEventListener('click', () => this.fileInput.click());
             this.shareBtn.addEventListener('click', () => this.shareCSV());
+            this.deleteListBtn.addEventListener('click', () => this.deleteCurrentList());
             this.fileInput.addEventListener('change', (e) => this.importCSV(e));
             
             // Sort Buttons
             this.sortButtons.forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const sortType = e.currentTarget.dataset.sort;
-                    
                     if (sortType === 'manual') {
                         this.sortMethod = 'manual';
-                        // manual doesn't use direction in this UI context
                     } else if (this.sortMethod === sortType) {
-                        // Toggle direction
                         this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
                     } else {
-                        // New sort type selected
                         this.sortMethod = sortType;
-                        // Intelligent defaults:
-                        // Time usually implies Newest first (descending timestamp)
                         if (sortType === 'time') this.sortDirection = 'desc';
                         else this.sortDirection = 'asc';
                     }
-                    
                     localStorage.setItem('focusList_sort', this.sortMethod);
                     localStorage.setItem('focusList_sortDir', this.sortDirection);
                     this.updateSortUI();
@@ -588,6 +683,37 @@
             });
 
             this.bindDragEvents();
+        },
+
+        /* --- List Management Logic --- */
+        addList(name = "New List") {
+            const newList = {
+                id: Date.now(),
+                name: name,
+                tasks: []
+            };
+            this.data.lists.push(newList);
+            this.switchList(newList.id);
+        },
+
+        switchList(id) {
+            this.data.activeListId = id;
+            this.save();
+            this.renderTabs();
+            this.render(); // Re-render tasks for new list
+            // Update Title input to match list name
+            this.appTitle.textContent = this.activeList.name;
+        },
+
+        deleteCurrentList() {
+            if (this.data.lists.length <= 1) {
+                return alert("You must have at least one list.");
+            }
+            if (!confirm(`Are you sure you want to delete "${this.activeList.name}"?`)) return;
+
+            this.data.lists = this.data.lists.filter(l => l.id !== this.data.activeListId);
+            // Switch to first available list
+            this.switchList(this.data.lists[0].id);
         },
 
         /* --- Theme Logic --- */
@@ -602,68 +728,70 @@
             this.themeToggle.textContent = this.theme === 'light' ? '🌙' : '☀️';
         },
 
-        /* --- Data Logic --- */
+        /* --- Data Logic (Operates on Active List) --- */
         save() {
-            if(this.sortMethod === 'manual') {
-                 localStorage.setItem('focusList_tasks', JSON.stringify(this.tasks));
-            } else {
-                // Preserving order when sorted via other methods
-                const currentRaw = localStorage.getItem('focusList_tasks');
-                let rawTasks = currentRaw ? JSON.parse(currentRaw) : [];
-                // Update modified tasks in the raw list
-                this.tasks.forEach(task => {
-                    const idx = rawTasks.findIndex(t => t.id === task.id);
-                    if(idx !== -1) rawTasks[idx] = task;
-                });
-                // Ensure deleted tasks are removed
-                const currentIds = new Set(this.tasks.map(t => t.id));
-                rawTasks = rawTasks.filter(t => currentIds.has(t.id));
-                
-                localStorage.setItem('focusList_tasks', JSON.stringify(rawTasks));
-            }
-            this.render();
+            localStorage.setItem('focusList_v2_data', JSON.stringify(this.data));
+            // No need to call render here usually, called by specific actions
         },
 
-        addTask(text, completed = false, color = this.colorPalette[0], details = '', id = null, createdAt = null) {
+        // FIX: Removed 'this.colorPalette[0]' from default parameter to prevent context issues
+        addTask(text, completed = false, color = null, details = '', id = null, createdAt = null) {
+            // Safe color assignment inside function body
+            const taskColor = color || this.colorPalette[0];
+            
             const task = {
                 id: id || Date.now(),
-                text: text.trim(),
+                text: text ? text.trim() : "New Task", // Safe trim
                 details: details,
                 completed: completed,
-                color: color,
+                color: taskColor,
                 createdAt: createdAt || new Date().toISOString()
             };
-            this.tasks.unshift(task);
-            this.sortMethod = 'manual'; // Reset to manual on add
-            this.updateSortUI();
-            this.save();
+            
+            if(this.activeList && this.activeList.tasks) {
+                this.activeList.tasks.unshift(task);
+                this.sortMethod = 'manual'; 
+                this.updateSortUI();
+                this.save();
+                this.render();
+            } else {
+                console.error("No active list found to add task");
+            }
         },
 
         deleteTask(id) {
-            this.tasks = this.tasks.filter(t => t.id !== id);
+            this.activeList.tasks = this.activeList.tasks.filter(t => t.id !== id);
             this.save();
+            this.render();
         },
 
         toggleTask(id) {
-            const task = this.tasks.find(t => t.id === id);
-            if (task) { task.completed = !task.completed; this.save(); }
+            const task = this.activeList.tasks.find(t => t.id === id);
+            if (task) { 
+                task.completed = !task.completed; 
+                this.save(); 
+                this.render();
+            }
         },
 
         updateColor(id, color) {
-            const task = this.tasks.find(t => t.id === id);
-            if (task) { task.color = color; this.save(); }
+            const task = this.activeList.tasks.find(t => t.id === id);
+            if (task) { 
+                task.color = color; 
+                this.save(); 
+                this.render();
+            }
         },
 
         /* --- Editing Logic --- */
         openEditModal(id) {
-            const task = this.tasks.find(t => t.id === id);
+            const task = this.activeList.tasks.find(t => t.id === id);
             if(!task) return;
             
             this.editingId = id;
             this.editTitleInput.value = task.text;
             this.editDetailsInput.value = task.details || '';
             
-            // Build Modal Color Picker
             this.modalColorPalette.innerHTML = '';
             this.colorPalette.forEach((color, idx) => {
                 const radioId = `modal-edit-color-${idx}`;
@@ -679,7 +807,6 @@
                 label.htmlFor = radioId;
                 label.className = 'palette-swatch';
                 label.style.backgroundColor = color;
-                label.setAttribute('aria-label', color);
                 
                 const wrapper = document.createElement('div');
                 wrapper.style.position = 'relative';
@@ -692,15 +819,14 @@
         },
 
         saveEdit() {
-            const task = this.tasks.find(t => t.id === this.editingId);
+            const task = this.activeList.tasks.find(t => t.id === this.editingId);
             if(task) {
                 task.text = this.editTitleInput.value.trim();
                 task.details = this.editDetailsInput.value.trim();
-                
                 const selectedColor = this.modalColorPalette.querySelector('input:checked');
                 if(selectedColor) task.color = selectedColor.value;
-                
                 this.save();
+                this.render();
             }
             this.editDialog.close();
             this.editingId = null;
@@ -730,46 +856,54 @@
                 btn.classList.toggle('active', isActive);
                 btn.setAttribute('aria-pressed', isActive);
                 
-                // Reset text defaults
                 if(type === 'alphabetical') btn.textContent = 'A-Z';
                 if(type === 'time') btn.textContent = 'Date';
                 if(type === 'color') btn.textContent = 'Color';
                 if(type === 'manual') btn.textContent = 'Manual';
 
-                // Update text based on direction if active
                 if (isActive && type !== 'manual') {
                     const arrow = this.sortDirection === 'asc' ? ' ↑' : ' ↓';
-                    
-                    if(type === 'alphabetical') {
-                        btn.textContent = this.sortDirection === 'asc' ? 'A-Z' : 'Z-A';
-                    } else if(type === 'time') {
-                        // Logic check: 'asc' sort is (a-b), which is Oldest first. 
-                        // 'desc' sort is (b-a), which is Newest first.
-                        btn.textContent = this.sortDirection === 'asc' ? 'Oldest' : 'Newest';
-                    } else if(type === 'color') {
-                        btn.textContent = 'Color' + arrow;
-                    }
+                    if(type === 'alphabetical') btn.textContent = this.sortDirection === 'asc' ? 'A-Z' : 'Z-A';
+                    else if(type === 'time') btn.textContent = this.sortDirection === 'asc' ? 'Oldest' : 'Newest';
+                    else if(type === 'color') btn.textContent = 'Color' + arrow;
                 }
             });
             this.listContainer.dataset.sortMode = this.sortMethod;
         },
 
-        render() {
-            // Split tasks
-            const activeTasks = this.tasks.filter(t => !t.completed);
-            const completedTasks = this.tasks.filter(t => t.completed);
+        renderTabs() {
+            this.tabsWrapper.innerHTML = '';
+            this.data.lists.forEach(list => {
+                const btn = document.createElement('button');
+                btn.className = `tab-btn ${list.id === this.data.activeListId ? 'active' : ''}`;
+                btn.textContent = list.name;
+                btn.dataset.id = list.id;
+                this.tabsWrapper.appendChild(btn);
+            });
+            
+            const addBtn = document.createElement('button');
+            addBtn.className = 'tab-btn new-tab-btn';
+            addBtn.innerHTML = '+';
+            addBtn.title = "Create New List";
+            this.tabsWrapper.appendChild(addBtn);
+        },
 
-            // Sort both lists
+        render() {
+            // Update Title Header to match active list
+            if (this.appTitle.textContent !== this.activeList.name && document.activeElement !== this.appTitle) {
+                this.appTitle.textContent = this.activeList.name;
+            }
+
+            const currentTasks = this.activeList.tasks;
+            const activeTasks = currentTasks.filter(t => !t.completed);
+            const completedTasks = currentTasks.filter(t => t.completed);
+
             const sortedActive = this.sortTasksList(activeTasks);
             const sortedCompleted = this.sortTasksList(completedTasks);
 
-            // Render Active
             this.renderList(sortedActive, this.list);
-            
-            // Render Completed
             this.renderList(sortedCompleted, this.completedList);
 
-            // Toggle UI States
             if (sortedActive.length === 0) {
                 this.emptyState.style.display = 'block';
                 this.emptyState.textContent = completedTasks.length > 0 
@@ -779,7 +913,6 @@
                 this.emptyState.style.display = 'none';
             }
 
-            // Toggle Completed Section Visibility
             this.completedSection.style.display = sortedCompleted.length > 0 ? 'block' : 'none';
         },
 
@@ -787,7 +920,6 @@
             container.innerHTML = '';
             tasks.forEach(task => {
                 const li = document.createElement('li');
-                // Only allow drag on active list + manual sort
                 const isDraggable = this.sortMethod === 'manual' && !task.completed;
                 const draggableClass = isDraggable ? 'draggable' : '';
                 
@@ -795,18 +927,15 @@
                 li.dataset.id = task.id;
                 li.draggable = isDraggable;
                 
-                // Visual Indicator
                 const indicator = document.createElement('div');
                 indicator.className = 'color-indicator';
                 indicator.style.backgroundColor = task.color;
 
-                // Drag Handle
                 const dragHandle = document.createElement('span');
                 dragHandle.className = 'drag-handle';
                 dragHandle.innerHTML = '⋮⋮';
                 dragHandle.ariaHidden = "true";
 
-                // Checkbox
                 const checkWrapper = document.createElement('div');
                 checkWrapper.className = 'checkbox-wrapper';
                 const checkbox = document.createElement('input');
@@ -815,7 +944,6 @@
                 checkbox.ariaLabel = `Mark "${task.text}" as ${task.completed ? 'active' : 'completed'}`;
                 checkWrapper.appendChild(checkbox);
 
-                // Content
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'task-content';
                 const span = document.createElement('div');
@@ -831,7 +959,6 @@
                     contentDiv.appendChild(preview);
                 }
 
-                // Color Palette
                 const paletteContainer = document.createElement('div');
                 paletteContainer.className = 'color-palette';
                 
@@ -850,7 +977,6 @@
                     label.htmlFor = radioId;
                     label.className = 'palette-swatch';
                     label.style.backgroundColor = paletteColor;
-                    label.setAttribute('aria-label', 'Color option');
 
                     const wrapper = document.createElement('div');
                     wrapper.style.position = 'relative';
@@ -859,7 +985,6 @@
                     paletteContainer.appendChild(wrapper);
                 });
 
-                // Actions
                 const actionGroup = document.createElement('div');
                 actionGroup.className = 'action-group';
 
@@ -881,15 +1006,12 @@
 
         /* --- Drag & Drop --- */
         bindDragEvents() {
-            // Only bind to active list
             this.list.addEventListener('dragstart', (e) => {
                 if(this.sortMethod !== 'manual') { e.preventDefault(); return; }
                 this.draggedItem = e.target.closest('li');
                 if(!this.draggedItem) return;
-                
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', this.draggedItem.dataset.id);
-                
                 setTimeout(() => this.draggedItem.classList.add('dragging'), 0);
             });
 
@@ -917,26 +1039,20 @@
                 
                 const target = e.target.closest('li');
                 if (target && target !== this.draggedItem) {
-                    // Position logic logic based on IDs in master list
+                    const tasks = this.activeList.tasks; // Use active list tasks
                     const draggedId = Number(this.draggedItem.dataset.id);
                     const targetId = Number(target.dataset.id);
                     
-                    const draggedIndex = this.tasks.findIndex(t => t.id === draggedId);
-                    let targetIndex = this.tasks.findIndex(t => t.id === targetId);
+                    const draggedIndex = tasks.findIndex(t => t.id === draggedId);
+                    let targetIndex = tasks.findIndex(t => t.id === targetId);
                     
                     if (draggedIndex > -1 && targetIndex > -1) {
-                        const [movedTask] = this.tasks.splice(draggedIndex, 1);
-                        
-                        // Recalculate target index because array shifted if we removed something before it
-                        targetIndex = this.tasks.findIndex(t => t.id === targetId);
-                        
-                        // Determine drop position (before or after target)
-                        if (target.classList.contains('drag-over-bottom')) {
-                            targetIndex++;
-                        }
-                        
-                        this.tasks.splice(targetIndex, 0, movedTask);
+                        const [movedTask] = tasks.splice(draggedIndex, 1);
+                        targetIndex = tasks.findIndex(t => t.id === targetId);
+                        if (target.classList.contains('drag-over-bottom')) targetIndex++;
+                        tasks.splice(targetIndex, 0, movedTask);
                         this.save();
+                        this.render();
                     }
                 }
             });
@@ -954,16 +1070,11 @@
 
         /* --- Shared Logic for Export/Share --- */
         getCSVContent() {
-             if (this.tasks.length === 0) return null;
+             const tasks = this.activeList.tasks;
+             if (tasks.length === 0) return null;
             
-            // Header: ID, Status, Task, Details, Color, CreatedAt
             let csvContent = "ID,Status,Task,Details,Color,Created At\n";
-            
-            // Export sorted as they appear in UI (sort of, we just grab current list state or use a default sort?)
-            // Usually exports dump the whole DB, let's dump everything but sorted logically
-            // We'll reuse sortTasksList logic but default to Time or something if Manual?
-            // Let's just dump current state in memory
-            const sortedTasks = this.sortTasksList([...this.tasks]);
+            const sortedTasks = this.sortTasksList([...tasks]);
 
             sortedTasks.forEach(task => {
                 const clean = (str) => `"${(str || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
@@ -974,17 +1085,15 @@
             return csvContent;
         },
 
-        /* --- Export / Import --- */
         exportCSV() {
             const csvContent = this.getCSVContent();
             if (!csvContent) return alert("No tasks to export.");
-            
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
-            
+            const safeName = this.activeList.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
             link.setAttribute("href", url);
-            link.setAttribute("download", `focuslist_export_${new Date().toISOString().slice(0,10)}.csv`);
+            link.setAttribute("download", `focuslist_${safeName}_${new Date().toISOString().slice(0,10)}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -994,19 +1103,17 @@
         shareCSV() {
             const csvContent = this.getCSVContent();
             if (!csvContent) return alert("No tasks to share.");
-            
-            const file = new File([csvContent], `focuslist_tasks_${new Date().toISOString().slice(0,10)}.csv`, { type: 'text/csv' });
+            const safeName = this.activeList.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const file = new File([csvContent], `focuslist_${safeName}.csv`, { type: 'text/csv' });
             
             if (navigator.canShare && navigator.canShare({ files: [file] })) {
                 navigator.share({
                     files: [file],
-                    title: 'FocusList Tasks',
+                    title: this.activeList.name,
                     text: 'Here is my task list export.'
-                })
-                .then(() => console.log('Share successful'))
-                .catch((error) => console.log('Error sharing', error));
+                }).catch((error) => console.log('Error sharing', error));
             } else {
-                alert("Sharing files is not supported on this browser/device. Please use the Export button instead.");
+                alert("Sharing files is not supported on this browser/device.");
             }
         },
 
@@ -1020,20 +1127,15 @@
                 const rows = text.split('\n');
                 let count = 0;
                 
-                // Process in reverse to maintain order when using unshift
                 for(let i = rows.length - 1; i >= 1; i--) {
                     const row = rows[i];
                     if (!row.trim()) continue;
-                    
                     const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-                    
                     if (cols && cols.length >= 3) {
                         const clean = (str) => str ? str.replace(/^"|"$/g, '').replace(/""/g, '"') : '';
-                        
                         let id = null, status, taskText, details = '', color, createdAt = null;
 
                         if(cols.length >= 6) {
-                            // Format: ID, Status, Task, Details, Color, CreatedAt
                             id = Number(cols[0]) || Date.now() + Math.random(); 
                             status = cols[1];
                             taskText = clean(cols[2]);
@@ -1041,7 +1143,6 @@
                             color = cols[4];
                             createdAt = cols[5];
                         } else {
-                            // Old formats fallback
                             status = cols[0];
                             taskText = clean(cols[1]);
                             color = cols[2];
@@ -1054,7 +1155,7 @@
                         count++;
                     }
                 }
-                alert(`Imported ${count} tasks.`);
+                alert(`Imported ${count} tasks into "${this.activeList.name}".`);
                 this.fileInput.value = ''; 
             };
             reader.readAsText(file);
